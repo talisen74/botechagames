@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>🌐 Network Command</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body { background: #060810; font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; padding: 12px; min-height: 100vh; touch-action: none; }
+#game-wrap { width: 720px; max-width: 100%; user-select: none; }
+h1 { font-size: 20px; font-weight: 500; color: #fff; margin-bottom: 10px; }
+#hud { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.hud-box { background: #131726; border: 0.5px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 5px 12px; font-size: 12px; color: #888; }
+.hud-box span { font-size: 16px; font-weight: 500; color: #fff; display: block; }
+#canvas-wrap { position: relative; border-radius: 12px; overflow: hidden; border: 0.5px solid rgba(255,255,255,0.12); cursor: crosshair; touch-action: none; width: 100%; aspect-ratio: 720 / 440; min-height: 200px; max-height: 80vh; }
+canvas { display: block; background: #060810; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+#overlay { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); border-radius: 12px; padding: 10px; text-align:center; pointer-events: auto; overflow-y: auto; }
+#overlay h2 { font-size: 18px; font-weight: 500; color: #fff; margin-bottom: 6px; flex-shrink: 0; }
+#overlay p { font-size: 11px; color: rgba(255,255,255,0.72); margin-bottom: 10px; max-width: 92%; line-height: 1.45; flex-shrink: 0; }
+#start-btn { background: #1D9E75; color: #fff; border: none; border-radius: 10px; padding: 12px 36px; font-size: 15px; cursor: pointer; font-family: inherit; touch-action: manipulation; min-height: 44px; flex-shrink: 0; }
+#start-btn:hover { background: #0F6E56; }
+#legend { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.leg { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #777; }
+.leg-dot { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+#vol-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: #666; }
+#vol-wrap input { width: 70px; }
+#hint { font-size: 11px; color: #555; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="game-wrap">
+  <h1>🌐 Network Command</h1>
+  <div id="hud">
+    <div class="hud-box">Score<span id="score">0</span></div>
+    <div class="hud-box" style="border-color:rgba(239,159,39,0.4)">🏆 Best<span id="highscore" style="color:#EF9F27">0</span></div>
+    <div class="hud-box">Wave<span id="wave">1</span></div>
+    <div class="hud-box">Servers<span id="servers-left">6</span></div>
+    <div class="hud-box">Ammo<span id="ammo">10</span></div>
+  </div>
+  <div id="vol-wrap">🔊 Volume <input type="range" id="vol" min="0" max="1" step="0.05" value="0.5"></div>
+  <div id="hint">Tap / click anywhere to fire an interceptor — protect your servers from incoming threats</div>
+  <div id="canvas-wrap">
+    <canvas id="gc" width="720" height="440"></canvas>
+    <div id="overlay">
+      <h2>🌐 Network Command</h2>
+      <p>
+        <strong style="color:#fff">Tap anywhere</strong> to fire an interceptor and blast incoming threats.<br>
+        Protect all 6 servers — lose them all and it's game over.<br>
+        Ammo refills each wave. Waves get faster. ⚡
+      </p>
+      <button id="start-btn">Start Game</button>
+    </div>
+  </div>
+  <div id="legend"></div>
+</div>
+<script>
+// ─── AUDIO ──────────────────────────────────────────────────────
+let AC = null;
+function getAC(){ if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); return AC; }
+function getVol(){ return parseFloat(document.getElementById('vol').value); }
+
+function playTone(o){
+  const ac=getAC(), vol=getVol();
+  const {type='sine',freq=440,freq2=freq,duration=0.15,gain=0.3,attack=0.005,decay=0.05,sustain=0.6,release=0.1,detune=0,delay=0}=o;
+  const st=ac.currentTime+delay;
+  const osc=ac.createOscillator(), env=ac.createGain(), master=ac.createGain();
+  master.gain.value=vol*gain;
+  osc.type=type; osc.frequency.setValueAtTime(freq,st);
+  if(freq2!==freq) osc.frequency.linearRampToValueAtTime(freq2,st+duration);
+  osc.detune.value=detune;
+  env.gain.setValueAtTime(0,st);
+  env.gain.linearRampToValueAtTime(1,st+attack);
+  env.gain.linearRampToValueAtTime(sustain,st+attack+decay);
+  env.gain.linearRampToValueAtTime(0,st+duration-release);
+  osc.connect(env);env.connect(master);master.connect(ac.destination);
+  osc.start(st);osc.stop(st+duration);
+}
+function playNoise(o){
+  const ac=getAC(), vol=getVol();
+  const {duration=0.1,gain=0.2,freq=800,q=1,type='bandpass',delay=0}=o;
+  const st=ac.currentTime+delay;
+  const bufSize=ac.sampleRate*duration;
+  const buf=ac.createBuffer(1,bufSize,ac.sampleRate);
+  const data=buf.getChannelData(0);
+  for(let i=0;i<bufSize;i++) data[i]=Math.random()*2-1;
+  const src=ac.createBufferSource(); src.buffer=buf;
+  const filt=ac.createBiquadFilter(); filt.type=type; filt.frequency.value=freq; filt.Q.value=q;
+  const env=ac.createGain(), master=ac.createGain();
+  master.gain.value=vol*gain;
+  env.gain.setValueAtTime(gain,st);
+  env.gain.exponentialRampToValueAtTime(0.001,st+duration);
+  src.connect(filt);filt.connect(env);env.connect(master);master.connect(ac.destination);
+  src.start(st);src.stop(st+duration);
+}
+const SFX = {
+  launch(){ playTone({type:'sine',freq:300,freq2:700,duration:0.18,gain:0.18,attack:0.005,decay:0.03,sustain:0.4,release:0.08}); },
+  explode(){ playNoise({duration:0.22,gain:0.3,freq:200,q:0.7}); playTone({type:'square',freq:160,freq2:50,duration:0.25,gain:0.18,attack:0.003,decay:0.05,sustain:0.3,release:0.1}); },
+  destroy(){ playNoise({duration:0.15,gain:0.28,freq:300,q:1}); playTone({type:'sine',freq:520,freq2:180,duration:0.18,gain:0.2,attack:0.003,delay:0.03}); },
+  serverHit(){ playTone({type:'sawtooth',freq:200,freq2:50,duration:0.4,gain:0.32,attack:0.01,decay:0.05,sustain:0.5,release:0.15}); playNoise({duration:0.35,gain:0.3,freq:150,q:0.5,delay:0.05}); },
+  noAmmo(){ playTone({type:'square',freq:200,duration:0.1,gain:0.15}); },
+  wave(){ const notes=[392,523,659]; notes.forEach((f,i)=>playTone({type:'triangle',freq:f,duration:0.16,gain:0.22,delay:i*0.08})); },
+  gameover(){ playTone({type:'sawtooth',freq:440,freq2:90,duration:0.9,gain:0.28,attack:0.01,decay:0.1,sustain:0.4,release:0.3}); playTone({type:'square',freq:330,freq2:70,duration:0.9,gain:0.2,delay:0.08}); playNoise({duration:0.4,gain:0.2,freq:120,q:0.5,delay:0.2}); },
+  start(){ const notes=[262,330,392,523,659]; notes.forEach((f,i)=>playTone({type:'triangle',freq:f,duration:0.14,gain:0.22,delay:i*0.07})); },
+  ammoRefill(){ playTone({type:'sine',freq:660,freq2:990,duration:0.3,gain:0.2}); }
+};
+
+// ─── THREATS ────────────────────────────────────────────────────
+const THREATS = [
+  { label:"DDoS",     colors:["#E24B4A","#F09595"], speed:1, points:10 },
+  { label:"MALWARE",  colors:["#D4537E","#ED93B1"], speed:1.2, points:15 },
+  { label:"RANSOM",   colors:["#D85A30","#F0997B"], speed:0.9, points:20 },
+  { label:"EXPLOIT",  colors:["#BA7517","#EF9F27"], speed:1.4, points:15 },
+  { label:"BOTNET",   colors:["#993556","#D4537E"], speed:1.1, points:12 },
+  { label:"TROJAN",   colors:["#A32D2D","#E24B4A"], speed:1.3, points:18 },
+  { label:"WORM",     colors:["#534AB7","#7F77DD"], speed:1.6, points:25, smart:true },
+];
+
+const SERVER_NAMES = ["WEB","DB","MAIL","DNS","API","AUTH"];
+const SERVER_COLOR = "#378ADD";
+
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const GROUND_Y = H - 50;
+const TURRET_X = W/2, TURRET_Y = GROUND_Y;
+
+let servers = [];
+function setupServers(){
+  servers = [];
+  const n = 6, margin = 40, usable = W - margin*2;
+  // leave a gap in the middle for the turret
+  const slotW = usable / n;
+  for(let i=0;i<n;i++){
+    const x = margin + slotW*i + slotW/2;
+    if (Math.abs(x - TURRET_X) < 30) continue; // skip slot too close to turret
+    servers.push({ x, alive:true, name: SERVER_NAMES[i % SERVER_NAMES.length], hitFlash:0 });
+  }
+}
+
+let threats = [], interceptors = [], explosions = [], particles = [];
+let score = 0, wave = 1, ammo = 10, ammoMax = 10;
+let running = false, animId = null, tick = 0;
+let lastSpawn = 0, spawnInterval = 1800, threatsThisWave = 0, threatsSpawned = 0, waveTransition = 0;
+let flashMsg = { text:'',x:0,y:0,alpha:0,color:'#fff',timer:0 };
+let highScore = parseInt(localStorage.getItem('netcmd_highscore') || '0');
+
+function updateHighScoreUI(){ document.getElementById('highscore').textContent = highScore; }
+updateHighScoreUI();
+
+function randThreat(){
+  // higher waves unlock nastier threats
+  const pool = THREATS.filter((t,i) => i <= Math.min(THREATS.length-1, 1 + Math.floor(wave/2)));
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+function aliveServers(){ return servers.filter(s=>s.alive); }
+
+function spawnThreat(){
+  const alive = aliveServers();
+  if(alive.length===0) return;
+  const target = alive[Math.floor(Math.random()*alive.length)];
+  const type = randThreat();
+  const startX = Math.random()*W;
+  threats.push({
+    type, x:startX, y:-20,
+    targetX: target.x, targetY: GROUND_Y,
+    server: target,
+    speed: (0.6 + wave*0.12) * type.speed,
+    phase: Math.random()*Math.PI*2,
+    trail: [],
+    wobbleDir: Math.random()<0.5?-1:1,
+    wobbleAmt: type.smart ? 18 : 4
+  });
+  threatsSpawned++;
+}
+
+function spawnParticles(x,y,colors,count=20,spread=4){
+  for(let i=0;i<count;i++){
+    const angle=(Math.PI*2/count)*i+Math.random()*0.4;
+    const spd=1.5+Math.random()*spread;
+    particles.push({x,y,vx:Math.cos(angle)*spd,vy:Math.sin(angle)*spd,
+      r:2+Math.random()*3, color:colors[Math.floor(Math.random()*colors.length)],
+      life:1, decay:0.03+Math.random()*0.025});
+  }
+}
+
+function lerpColor(a,b,t){
+  const ah=parseInt(a.slice(1),16),bh=parseInt(b.slice(1),16);
+  const ar=(ah>>16)&0xff,ag=(ah>>8)&0xff,ab=ah&0xff;
+  const br=(bh>>16)&0xff,bg=(bh>>8)&0xff,bb=bh&0xff;
+  return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
+}
+
+function drawRoundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+}
+
+function drawGround(){
+  ctx.fillStyle = '#0a0d16';
+  ctx.fillRect(0, GROUND_Y, W, H-GROUND_Y);
+  ctx.strokeStyle = 'rgba(55,138,221,0.25)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0,GROUND_Y); ctx.lineTo(W,GROUND_Y); ctx.stroke();
+}
+
+function drawServer(s){
+  if(!s.alive){
+    // rubble
+    ctx.save();
+    ctx.fillStyle = 'rgba(80,30,30,0.5)';
+    drawRoundRect(s.x-18, GROUND_Y-14, 36, 14, 3);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(180,80,80,0.6)';
+    ctx.font = '9px system-ui,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('OFFLINE', s.x, GROUND_Y-4);
+    ctx.restore();
+    return;
+  }
+  const flash = s.hitFlash>0;
+  if(s.hitFlash>0) s.hitFlash--;
+  ctx.save();
+  if(flash) ctx.globalAlpha = 0.5+0.5*Math.sin(s.hitFlash*1.2);
+  ctx.shadowColor = SERVER_COLOR;
+  ctx.shadowBlur = 8 + 3*Math.sin(tick*0.08 + s.x);
+  ctx.fillStyle = '#16243a';
+  drawRoundRect(s.x-22, GROUND_Y-34, 44, 34, 5);
+  ctx.fill();
+  ctx.strokeStyle = SERVER_COLOR;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  // server rack lines
+  ctx.shadowBlur=0;
+  ctx.strokeStyle = 'rgba(55,138,221,0.4)';
+  for(let i=0;i<3;i++){
+    ctx.beginPath();
+    ctx.moveTo(s.x-18, GROUND_Y-28+i*8);
+    ctx.lineTo(s.x+18, GROUND_Y-28+i*8);
+    ctx.stroke();
+  }
+  // blinking light
+  ctx.fillStyle = Math.sin(tick*0.15+s.x)>0 ? '#5DCAA5' : '#1D9E75';
+  ctx.beginPath(); ctx.arc(s.x+15, GROUND_Y-28, 2, 0, Math.PI*2); ctx.fill();
+  // label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 9px system-ui,sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(s.name, s.x, GROUND_Y-14);
+  ctx.restore();
+}
+
+function drawTurret(){
+  ctx.save();
+  ctx.shadowColor = '#1D9E75';
+  ctx.shadowBlur = 10 + 4*Math.sin(tick*0.1);
+  // base
+  ctx.fillStyle = '#142a22';
+  ctx.beginPath();
+  ctx.moveTo(TURRET_X-28, GROUND_Y);
+  ctx.lineTo(TURRET_X-16, GROUND_Y-26);
+  ctx.lineTo(TURRET_X+16, GROUND_Y-26);
+  ctx.lineTo(TURRET_X+28, GROUND_Y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#1D9E75';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // dome
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#1c3a2e';
+  ctx.beginPath();
+  ctx.arc(TURRET_X, GROUND_Y-26, 10, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = '#5DCAA5';
+  ctx.stroke();
+  ctx.shadowBlur=0;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 8px system-ui,sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('DEFENSE', TURRET_X, GROUND_Y+12);
+  ctx.restore();
+}
+
+function drawThreat(t){
+  const baseColor = lerpColor(t.type.colors[0], t.type.colors[1], (Math.sin(tick*0.15+t.phase)+1)/2);
+  ctx.save();
+  for(let i=t.trail.length-1;i>=0;i--){
+    const tr=t.trail[i];
+    ctx.save(); ctx.globalAlpha = tr.alpha*0.4;
+    ctx.fillStyle = baseColor;
+    ctx.beginPath(); ctx.arc(tr.x,tr.y,4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    tr.alpha -= 0.1;
+  }
+  t.trail = t.trail.filter(tr=>tr.alpha>0);
+  if(tick%2===0) t.trail.push({x:t.x,y:t.y,alpha:0.6});
+
+  ctx.shadowColor = t.type.colors[0];
+  ctx.shadowBlur = 8 + 3*Math.abs(Math.sin(tick*0.2+t.phase));
+  ctx.fillStyle = baseColor;
+  ctx.beginPath(); ctx.arc(t.x,t.y,9,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.shadowBlur=0;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 7px system-ui,sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(t.type.label, t.x, t.y+2.5);
+  ctx.restore();
+}
+
+function drawInterceptor(b){
+  ctx.save();
+  for(let i=b.trail.length-1;i>=0;i--){
+    const tr=b.trail[i];
+    ctx.save(); ctx.globalAlpha = tr.alpha*0.5;
+    ctx.fillStyle = '#5DCAA5';
+    ctx.beginPath(); ctx.arc(tr.x,tr.y,2.5,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    tr.alpha -= 0.12;
+  }
+  b.trail = b.trail.filter(tr=>tr.alpha>0);
+  b.trail.push({x:b.x,y:b.y,alpha:0.7});
+
+  ctx.shadowColor = '#5DCAA5';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(b.x,b.y,4,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawExplosion(e){
+  const r = e.radius;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, e.life);
+  const grad = ctx.createRadialGradient(e.x,e.y,0,e.x,e.y,r);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(0.4, 'rgba(93,202,165,0.6)');
+  grad.addColorStop(1, 'rgba(93,202,165,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(e.x,e.y,r,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'rgba(93,202,165,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(e.x,e.y,r,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    ctx.save(); ctx.globalAlpha=p.life;
+    ctx.shadowColor=p.color; ctx.shadowBlur=5;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=p.color; ctx.fill(); ctx.restore();
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.06;
+    p.life-=p.decay; p.r*=0.97;
+    if(p.life<=0) particles.splice(i,1);
+  }
+}
+
+function showMsg(text,x,y,color){ flashMsg={text,x,y,alpha:1,color,timer:55}; }
+function drawFlash(){
+  if(flashMsg.alpha<=0) return;
+  ctx.save(); ctx.globalAlpha=flashMsg.alpha;
+  ctx.font='bold 15px system-ui,sans-serif';
+  ctx.shadowColor=flashMsg.color; ctx.shadowBlur=8;
+  ctx.fillStyle=flashMsg.color; ctx.textAlign='center';
+  ctx.fillText(flashMsg.text,flashMsg.x,flashMsg.y);
+  ctx.restore();
+  flashMsg.timer--; flashMsg.alpha=Math.max(0,flashMsg.timer/45);
+}
+
+function drawBg(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = '#060810';
+  ctx.fillRect(0,0,W,H);
+  // stars / network nodes
+  for(let i=0;i<28;i++){
+    const sx = (i*47+13)%W, sy=(i*83+7)%(GROUND_Y-10);
+    const tw = (Math.sin(tick*0.03+i)+1)/2;
+    ctx.fillStyle = `rgba(120,160,220,${0.08+tw*0.12})`;
+    ctx.beginPath(); ctx.arc(sx,sy,1.5,0,Math.PI*2); ctx.fill();
+  }
+}
+
+function fireInterceptor(targetX, targetY){
+  if(!running) return;
+  if(ammo<=0){ SFX.noAmmo(); showMsg('OUT OF AMMO', W/2, H/2-30, '#E24B4A'); return; }
+  ammo--;
+  document.getElementById('ammo').textContent = ammo;
+  const dx = targetX-TURRET_X, dy = targetY-TURRET_Y;
+  const dist = Math.sqrt(dx*dx+dy*dy);
+  const speed = 9;
+  interceptors.push({
+    x: TURRET_X, y: TURRET_Y,
+    vx: dx/dist*speed, vy: dy/dist*speed,
+    targetX, targetY, trail: []
+  });
+  SFX.launch();
+}
+
+function updateSpeedAndDifficulty(){
+  spawnInterval = Math.max(350, 1700 - wave*110);
+}
+
+function startWave(){
+  threatsThisWave = 5 + wave*2;
+  threatsSpawned = 0;
+  updateSpeedAndDifficulty();
+  ammo = ammoMax = Math.min(20, 8 + wave*2);
+  document.getElementById('ammo').textContent = ammo;
+  document.getElementById('wave').textContent = wave;
+  SFX.wave();
+  SFX.ammoRefill();
+  showMsg('WAVE '+wave, W/2, H/2-20, '#5DCAA5');
+}
+
+function gameLoop(ts){
+  if(!running) return;
+  animId = requestAnimationFrame(gameLoop);
+  tick++;
+
+  drawBg();
+
+  // Spawn threats for current wave
+  if(threatsSpawned < threatsThisWave && ts - lastSpawn > spawnInterval && aliveServers().length>0){
+    spawnThreat();
+    lastSpawn = ts;
+  }
+
+  // Wave complete check
+  if(threatsSpawned >= threatsThisWave && threats.length===0 && waveTransition<=0 && aliveServers().length>0){
+    waveTransition = 90;
+  }
+  if(waveTransition>0){
+    waveTransition--;
+    if(waveTransition===1){ wave++; startWave(); }
+  }
+
+  // Move + draw threats
+  for(let i=threats.length-1;i>=0;i--){
+    const t = threats[i];
+    const dx = t.targetX - t.x, dy = t.targetY - t.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if(dist < 6 || t.y >= t.targetY){
+      // hit server (if still alive)
+      if(t.server.alive){
+        t.server.alive = false;
+        t.server.hitFlash = 20;
+        spawnParticles(t.server.x, GROUND_Y-15, t.type.colors, 26, 5);
+        SFX.serverHit();
+        document.getElementById('servers-left').textContent = aliveServers().length;
+        showMsg(t.server.name+' OFFLINE', t.server.x, GROUND_Y-50, '#E24B4A');
+        if(aliveServers().length===0){
+          threats.splice(i,1);
+          endGame();
+          return;
+        }
+      }
+      threats.splice(i,1);
+      continue;
+    }
+    const step = t.speed;
+    t.x += (dx/dist)*step;
+    t.y += (dy/dist)*step;
+    // smart wobble for worm-type threats
+    if(t.type.smart){
+      t.x += Math.sin(tick*0.1 + t.phase) * 0.6 * t.wobbleDir;
+    }
+    drawThreat(t);
+  }
+
+  // Move + draw interceptors, check explosion trigger
+  for(let i=interceptors.length-1;i>=0;i--){
+    const b = interceptors[i];
+    b.x += b.vx; b.y += b.vy;
+    const dx = b.targetX-b.x, dy=b.targetY-b.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if(dist < 10 || b.y <= 4){
+      explosions.push({x:b.targetX, y:b.targetY, radius:5, maxRadius:48, life:1, growing:true});
+      SFX.explode();
+      interceptors.splice(i,1);
+      continue;
+    }
+    drawInterceptor(b);
+  }
+
+  // Update explosions, check threat kills
+  for(let i=explosions.length-1;i>=0;i--){
+    const e = explosions[i];
+    if(e.growing){
+      e.radius += 3.2;
+      if(e.radius >= e.maxRadius){ e.growing=false; }
+    } else {
+      e.life -= 0.045;
+    }
+    // check threats within blast
+    for(let j=threats.length-1;j>=0;j--){
+      const t = threats[j];
+      const ddx=t.x-e.x, ddy=t.y-e.y;
+      if(Math.sqrt(ddx*ddx+ddy*ddy) < e.radius){
+        spawnParticles(t.x,t.y,t.type.colors,16,4);
+        score += t.type.points;
+        document.getElementById('score').textContent = score;
+        SFX.destroy();
+        threats.splice(j,1);
+      }
+    }
+    drawExplosion(e);
+    if(!e.growing && e.life<=0) explosions.splice(i,1);
+  }
+
+  servers.forEach(drawServer);
+  drawTurret();
+  drawParticles();
+  drawFlash();
+}
+
+// ─── INPUT ──────────────────────────────────────────────────────
+function getCanvasCoords(clientX, clientY){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX-rect.left) * (W/rect.width),
+    y: (clientY-rect.top) * (H/rect.height)
+  };
+}
+canvas.addEventListener('click', e=>{
+  const {x,y} = getCanvasCoords(e.clientX, e.clientY);
+  fireInterceptor(x,y);
+});
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  const touch = e.touches[0];
+  const {x,y} = getCanvasCoords(touch.clientX, touch.clientY);
+  fireInterceptor(x,y);
+}, {passive:false});
+
+function endGame(){
+  running = false;
+  cancelAnimationFrame(animId);
+  const isNew = score > highScore;
+  if(isNew){ highScore = score; localStorage.setItem('netcmd_highscore', highScore); updateHighScoreUI(); }
+  SFX.gameover();
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `<h2>${isNew ? '🏆 New High Score!' : '🔴 Network Down'}</h2>
+    <p>${isNew ? `<strong style="color:#EF9F27;font-size:22px">${score}</strong><br><br>` : `Score: <strong style="color:#fff">${score}</strong><br><br>`}
+    Reached wave <strong style="color:#5DCAA5">${wave}</strong><br>
+    <span style="color:#EF9F27;font-size:12px">🏆 Best: ${highScore}</span></p>
+    <button id="start-btn">Play Again</button>`;
+  ov.style.display = 'flex';
+  document.getElementById('start-btn').onclick = startGame;
+}
+
+function startGame(){
+  setupServers();
+  threats=[]; interceptors=[]; explosions=[]; particles=[];
+  score=0; wave=1; tick=0; lastSpawn=0; waveTransition=0;
+  document.getElementById('score').textContent = 0;
+  document.getElementById('servers-left').textContent = aliveServers().length;
+  document.getElementById('overlay').style.display = 'none';
+  SFX.start();
+  startWave();
+  running = true;
+  requestAnimationFrame(gameLoop);
+}
+
+document.getElementById('start-btn').onclick = startGame;
+
+setupServers();
+document.getElementById('servers-left').textContent = aliveServers().length;
+
+const leg = document.getElementById('legend');
+THREATS.forEach(t=>{
+  const d = document.createElement('div'); d.className='leg';
+  d.innerHTML = `<div class="leg-dot" style="background:${t.colors[0]}"></div><span>${t.label} ${t.smart?'(dodges!)':''} — ${t.points}pts</span>`;
+  leg.appendChild(d);
+});
+</script>
+</body>
+</html>
