@@ -67,7 +67,8 @@ canvas { display: block; background: #05070d; width: 100%; height: 100%; positio
         Rotten packets drift in and threaten your <strong style="color:#fff">core integrity</strong> if they collide.<br>
         Shoot them — bigger threats split into smaller ones on impact, just like asteroids.<br>
         Use the on-screen buttons: ◀ ▶ rotate, ▲ thrust, ● fire.<br>
-        Clear each wave to advance. Core integrity hits 0% = game over. ⚡
+        Clear each wave to advance. Core integrity hits 0% = game over. ⚡<br>
+        Press <strong style="color:#fff">Esc</strong> anytime to pause.
       </p>
       <button id="start-btn">Start Game</button>
     </div>
@@ -524,10 +525,13 @@ bindHold(document.getElementById('btn-fire'),   ()=>input.fire=true,   ()=>input
 
 // Keyboard support too (for desktop testing)
 window.addEventListener('keydown', e=>{
-  if(e.key==='ArrowLeft')  input.left=true;
-  if(e.key==='ArrowRight') input.right=true;
-  if(e.key==='ArrowUp')    input.thrust=true;
-  if(e.key===' '){ input.fire=true; e.preventDefault(); }
+  if(!running) return;
+  if(e.key==='ArrowLeft')  { input.left=true; e.preventDefault(); }
+  if(e.key==='ArrowRight') { input.right=true; e.preventDefault(); }
+  if(e.key==='ArrowUp')    { input.thrust=true; e.preventDefault(); }
+  if(e.key==='ArrowDown')  { e.preventDefault(); }
+  if(e.key===' ')          { input.fire=true; e.preventDefault(); }
+  if(e.key==='Escape')     { e.preventDefault(); exitGame(); }
 });
 window.addEventListener('keyup', e=>{
   if(e.key==='ArrowLeft')  input.left=false;
@@ -535,6 +539,24 @@ window.addEventListener('keyup', e=>{
   if(e.key==='ArrowUp')    input.thrust=false;
   if(e.key===' ')          input.fire=false;
 });
+
+function exitGame(){
+  running = false;
+  cancelAnimationFrame(animId);
+  input.left=false; input.right=false; input.thrust=false; input.fire=false;
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `<h2 style="color:#fff !important;">⏸️ Paused</h2>
+    <p style="color:rgba(255,255,255,0.72) !important;">Score: <strong style="color:#fff !important;">${score}</strong> &nbsp;|&nbsp; Level: <strong style="color:#5DCAA5 !important;">${level}</strong></p>
+    <button id="start-btn" style="color:#fff !important; background:#1D9E75 !important;">Resume</button>`;
+  ov.style.display = 'flex';
+  document.getElementById('start-btn').onclick = resumeGame;
+}
+
+function resumeGame(){
+  document.getElementById('overlay').style.display = 'none';
+  running = true;
+  requestAnimationFrame(gameLoop);
+}
 
 function endGame(){
   running = false;
